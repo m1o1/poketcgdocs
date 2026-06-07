@@ -21,7 +21,7 @@ grayscale and needs a few pre-shaded extra tiles. This doc walks the whole path.
 - [10. Does it reuse tiles? Rarely.](#10-does-it-reuse-tiles-rarely)
 - [11. Worked example — Grass Energy](#11-worked-example--grass-energy-21-extra-tiles)
 - [12. Contrast — a card with no extra](#12-contrast--a-card-with-no-extra-tiles-abra)
-- [13. How the extra tiles are stored in source](#13-how-the-extra-tiles-are-stored-in-source)
+- [13. How the portrait and extra tiles are stored in source](#13-how-the-portrait-and-extra-tiles-are-stored-in-source)
 - [14. Comparison to tcg1](#14-comparison-to-tcg1)
 
 ---
@@ -29,8 +29,10 @@ grayscale and needs a few pre-shaded extra tiles. This doc walks the whole path.
 ## 1. The tile format
 
 A portrait is **48 tiles** in an 8-wide × 6-tall grid, stored as standard Game Boy
-**2bpp** graphics — exactly what `src/gfx/cards/<name>.2bpp` holds (built from
-`<name>.png`). Every card is the same size: **768 bytes = 48 × 16**.
+**2bpp** graphics — exactly what `src/gfx/cards/<name>.2bpp` holds. (The source
+`<name>.png` is the *colored* in-duel card; the grayscale `.2bpp` is derived from
+it at build — see [§13](#13-how-the-portrait-and-extra-tiles-are-stored-in-source).)
+Every card is the same size: **768 bytes = 48 × 16**.
 
 Each 16-byte tile is 8 rows × 2 bytes; row `r` is bytes `2r` (bitplane 0) and
 `2r+1` (bitplane 1), interleaved. A pixel is two bits — `value = (plane1 << 1) |
@@ -42,10 +44,10 @@ plane1 = 0xF1 = 1 1 1 1 0 0 0 1
 pixels =        3 3 2 2 1 0 0 3      ← (plane1<<1)|plane0 per column
 ```
 
-The `.2bpp`/`.png` is **grayscale** — it only stores the *shape* (which of 4
-shades each pixel is). The actual colors come from the palettes, applied when the
-card is drawn (next section). Tiles are stored **column-major** (`rgbgfx -Z`): tile
-`k` belongs at grid column `k // 6`, row `k % 6`.
+The `.2bpp` is **grayscale** — it only stores the *shape* (which of 4 shades each
+pixel is). The actual colors come from the palettes, applied when the card is drawn
+(next section). Tiles are stored **column-major** (`rgbgfx -Z`): tile `k` belongs at
+grid column `k // 6`, row `k % 6`.
 
 ---
 
@@ -69,8 +71,10 @@ two unrelated fields:
 So a card's color is `grayscale tiles` × `3 palettes` × `per-cell palette choice`.
 On the Game Boy Color this is free: every background tile already has an attribute
 byte selecting its palette, and the game just writes `attr[cell] >> 6` into the
-BG attribute map — the hardware recolors each cell. The portrait `.png` stays a
+BG attribute map — the hardware recolors each cell. In the ROM the tiles stay a
 plain 4-shade grayscale; the palettes live in the card header as `rgb` directives.
+(The *source* `<name>.png` bakes those palettes back in so it's a real colored
+card; the build re-separates them — [§13](#13-how-the-portrait-and-extra-tiles-are-stored-in-source).)
 
 This is the headline difference from the original game ([§14](#14-comparison-to-tcg1)):
 tcg1 cards are single-palette (4 colors); poketcg2 added the 3-palette + attribute
@@ -88,7 +92,7 @@ cards carry some; the other 254 stop at the portrait.
 This trailing data is used **only by the Game Boy Printer**, never by the in-duel
 display. In source, a card with extra tiles stores the full remapped printer
 image as `src/gfx/cards/<name>_remapped.png` and the build derives these tiles
-from it ([§13](#13-how-the-extra-tiles-are-stored-in-source)). For now just keep
+from it ([§13](#13-how-the-portrait-and-extra-tiles-are-stored-in-source)). For now just keep
 in mind that a card's record is the 48-tile portrait *plus*, for many cards, a
 few more tiles tacked on the end — that's why the storage layout below has an
 "extra tiles" row. [§9](#9-why-the-extra-tiles-exist) explains why they exist.
@@ -375,7 +379,7 @@ Notice the offsets *fall* as `c` rises (47, 44, 43, 38, 33, 28, 21, 19, 18): eac
 is `target − c`, and because the targets climb (48, 51, 56, …, 63) the extra tiles
 come out **dense and in order** (48…63, no gaps) — which is exactly what lets the
 build harvest them straight back out of the remapped image
-([§13](#13-how-the-extra-tiles-are-stored-in-source)).
+([§13](#13-how-the-portrait-and-extra-tiles-are-stored-in-source)).
 
 (In a duel none of this applies: every cell shows its own portrait tile 1:1, tinted
 only by the byte's top 2 bits — Drowzee uses palettes 0, 1, and 2.)
@@ -398,7 +402,33 @@ Charmander sits between the two — just 3 extra tiles (cells 33, 39, 45):
 
 ---
 
-## 13. How the extra tiles are stored in source
+## 13. How the portrait and extra tiles are stored in source
+
+### The portrait — a colored PNG, grayscale derived
+
+The ROM stores the portrait as 48 **grayscale** tiles (`<name>.2bpp`), recolored at
+draw time by the palettes. But a 4-shade grayscale image is an unpleasant thing to
+keep as source, so instead the repo stores the **colored in-duel card** as
+`src/gfx/cards/<name>.png` (the real artwork — 64×48, up to 12 colors), and the
+build **derives** the grayscale `<name>.2bpp` from it.
+
+This is the same shape→color split as §2, run backwards. Each 8×8 cell of the color
+image is one tile painted with one of the card's 3 palettes; the attribute map says
+which (`attr[cell] >> 6`, read row-major per [§8](#8-tile-order-vs-cell-order)).
+[tools/derive_color_tiles.py](../tools/derive_color_tiles.py) (run by the Makefile)
+**inverts** that palette per cell — each colored pixel maps back to the 2-bit shade
+whose palette entry matches it — and writes the column-major `<name>.2bpp` that
+`card_graphics.asm` INCBINs. (It's pure-stdlib `zlib` PNG decoding, so the build
+needs no image library.)
+
+It's **byte-exact** for all 445 cards: a palette is injective on the shades its
+cells actually use, so the inversion is unambiguous. The one caveat is degenerate
+palettes — 3 cards (`moon_stone`, `poliwag_lv15`, `venomoth_lv22`) have an all-white
+palette, but they use it only on blank cells, so nothing is lost. A *visible* shape
+hidden under a duplicate-color palette would be the one thing this representation
+couldn't round-trip; no card has one.
+
+### The extra tiles — harvested from the printer image
 
 The portrait and the extra tiles are **one logical tile array** indexed by the
 header — the extra is *not* a spatial extension of the portrait and *not* a
