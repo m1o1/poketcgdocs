@@ -338,6 +338,48 @@ The byte's *high* bits aren't shown here — they're the palette, and as noted i
 [§8](#8-tile-order-vs-cell-order) the in-duel renderer reads them in a different
 (row-major) order.
 
+### Reading the raw bytes — Drowzee Lv10
+
+The attribute map can look like it isn't "pointing" at anything, because the low 6
+bits are a **relative offset, not a tile number** — the source tile is
+`(attr[c] & 0x3f) + c`, so you *add the cell's own index*. Drowzee's 48 bytes:
+
+```
+db $40, $6f, $6f, $6f, $40, $40, $40, $6c, $6c, $ac, $6c, $ac, $80, $6b, $00, $80
+db $00, $00, $00, $26, $00, $00, $00, $00, $40, $21, $00, $00, $00, $00, $00, $5c
+db $40, $40, $00, $00, $00, $00, $40, $55, $55, $40, $00, $13, $00, $12, $00, $40
+```
+
+Cells are numbered 0–47 straight down the bytes (the three `db` lines are only
+formatting — `c=0` is the first `$40`, `c=16` is the first byte of line 2). A byte
+whose low 6 bits are 0 (`$40`, `$80`, `$00` all give `& $3f == 0`) is a cell that
+uses *its own* portrait tile — no redirect. The cells with a non-zero offset reach
+forward into the extra pool:
+
+| cell `c` | byte | offset (`& $3f`) | source = offset + `c` |
+|---|---|---|---|
+| 1  | `$6f` | 47 | 47 + 1  = **48** (extra 0)  |
+| 2  | `$6f` | 47 | 47 + 2  = **49** (extra 1)  |
+| 7  | `$6c` | 44 | 44 + 7  = **51** (extra 3)  |
+| 9  | `$ac` | 44 | 44 + 9  = **53** (extra 5)  |
+| 13 | `$6b` | 43 | 43 + 13 = **56** (extra 8)  |
+| 25 | `$21` | 33 | 33 + 25 = **58** (extra 10) |
+| 31 | `$5c` | 28 | 28 + 31 = **59** (extra 11) |
+| 45 | `$12` | 18 | 18 + 45 = **63** (extra 15) |
+
+The full set of redirected cells is `1, 2, 3, 7, 8, 9, 10, 11, 13, 19, 25, 31, 39,
+40, 43, 45` — 16 cells pointing at sources **48–63**, i.e. **16 extra tiles =
+256 bytes**, matching `drowzee_lv10_extra.2bpp`.
+
+Notice the offsets *fall* as `c` rises (47, 44, 43, 38, 33, 28, 21, 19, 18): each
+is `target − c`, and because the targets climb (48, 51, 56, …, 63) the extra tiles
+come out **dense and in order** (48…63, no gaps) — which is exactly what lets the
+build harvest them straight back out of the remapped image
+([§13](#13-how-the-extra-tiles-are-stored-in-source)).
+
+(In a duel none of this applies: every cell shows its own portrait tile 1:1, tinted
+only by the byte's top 2 bits — Drowzee uses palettes 0, 1, and 2.)
+
 ---
 
 ## 12. Contrast — a card with **no** extra tiles (Abra)
